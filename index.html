@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>iPad Sensor Logger</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: auto;
+      background: #f7f7f7;
+      color: #111;
+    }
+
+    h1 {
+      font-size: 28px;
+    }
+
+    button {
+      font-size: 18px;
+      padding: 12px 18px;
+      margin: 6px 4px;
+      border: none;
+      border-radius: 10px;
+      background: #007aff;
+      color: white;
+    }
+
+    button.stop {
+      background: #ff3b30;
+    }
+
+    button.secondary {
+      background: #555;
+    }
+
+    .box {
+      background: white;
+      padding: 16px;
+      border-radius: 12px;
+      margin-top: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    pre {
+      white-space: pre-wrap;
+      font-size: 14px;
+      background: #eee;
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+
+    .status {
+      font-weight: bold;
+      color: #007aff;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>iPad Sensor Logger</h1>
+
+  <p>
+    Tato webová aplikace ukládá data z pohybových senzorů iPadu a umožňuje export do CSV.
+  </p>
+
+  <div>
+    <button onclick="startRecording()">Start měření</button>
+    <button class="stop" onclick="stopRecording()">Stop</button>
+    <button class="secondary" onclick="downloadCSV()">Export CSV</button>
+    <button class="secondary" onclick="clearData()">Smazat data</button>
+  </div>
+
+  <div class="box">
+    <p>Stav: <span id="status" class="status">čekám</span></p>
+    <p>Počet vzorků: <span id="count">0</span></p>
+  </div>
+
+  <div class="box">
+    <h2>Aktuální hodnoty</h2>
+    <pre id="output">Zatím žádná data.</pre>
+  </div>
+
+  <div class="box">
+    <h2>Poznámka</h2>
+    <p>
+      Na iPadu je potřeba stránku otevřít v Safari přes HTTPS. GitHub Pages HTTPS podporuje automaticky.
+      Po kliknutí na Start by se měl zobrazit dotaz na povolení přístupu k pohybovým senzorům.
+    </p>
+  </div>
+
+  <script>
+    let recording = false;
+    let rows = [];
+    let lastOrientation = {
+      alpha: "",
+      beta: "",
+      gamma: ""
+    };
+
+    function resetRows() {
+      rows = [[
+        "unix_time_ms",
+        "iso_time",
+        "event_interval_ms",
+
+        "acceleration_x",
+        "acceleration_y",
+        "acceleration_z",
+
+        "acceleration_including_gravity_x",
+        "acceleration_including_gravity_y",
+        "acceleration_including_gravity_z",
+
+        "rotation_rate_alpha",
+        "rotation_rate_beta",
+        "rotation_rate_gamma",
+
+        "orientation_alpha",
+        "orientation_beta",
+        "orientation_gamma"
+      ]];
+    }
+
+    resetRows();
+
+    async function requestSensorPermissions() {
+      try {
+        if (
+          typeof DeviceMotionEvent !== "undefined" &&
+          typeof DeviceMotionEvent.requestPermission === "function"
+        ) {
+          const motionPermission = await DeviceMotionEvent.requestPermission();
+
+          if (motionPermission !== "granted") {
+            alert("Přístup k DeviceMotion nebyl povolen.");
+            return false;
+          }
+        }
+
+        if (
+          typeof DeviceOrientationEvent !== "undefined" &&
+          typeof DeviceOrientationEvent.requestPermission === "function"
+        ) {
+          const orientationPermission = await DeviceOrientationEvent.requestPermission();
+
+          if (orientationPermission !== "granted") {
+            alert("Přístup k DeviceOrientation nebyl povolen.");
+            return false;
+          }
+        }
+
+        return true;
+      } catch (error) {
+        alert("Chyba při žádosti o povolení senzorů: " + error);
+        return false;
+      }
+    }
+
+    async function startRecording() {
+      const allowed = await requestSensorPermissions();
+
+      if (!allowed) {
+        document.getElementById("status").textContent = "povolení zamítnuto";
+        return;
+      }
+
+      recording = true;
+
+      window.addEventListener("devicemotion", handleMotion);
+      window.addEventListener("deviceorientation", handleOrientation);
+
+      document.getElementById("status").textContent = "měření běží";
+    }
+
+    function stopRecording() {
+      recording = false;
+
+      window.removeEventListener("devicemotion", handleMotion);
+      window.removeEventListener("deviceorientation", handleOrientation);
+
+      document.getElementById("status").textContent = "měření zastaveno";
+    }
+
+    function clearData() {
+      stopRecording();
+      resetRows();
+      document.getElementById("count").textContent = "0";
+      document.getElementById("output").textContent = "Data smazána.";
+      document.getElementById("status").textContent = "čekám";
+    }
+
+    function handleOrientation(event) {
+      lastOrientation = {
+        alpha: valueOrEmpty(event.alpha),
+        beta: valueOrEmpty(event.beta),
+        gamma: valueOrEmpty(event.gamma)
+      };
+    }
+
+    function handleMotion(event) {
+      if (!recording) return;
+
+      const now = Date.now();
+      const iso = new Date(now).toISOString();
+
+      const acc = event.acceleration || {};
+      const accG = event.accelerationIncludingGravity || {};
+      const rot = event.rotationRate || {};
+
+      const row = [
+        now,
+        iso,
+        valueOrEmpty(event.interval),
+
+        valueOrEmpty(acc.x),
+        valueOrEmpty(acc.y),
+        valueOrEmpty(acc.z),
+
+        valueOrEmpty(accG.x),
+        valueOrEmpty(accG.y),
+        valueOrEmpty(accG.z),
+
+        valueOrEmpty(rot.alpha),
+        valueOrEmpty(rot.beta),
+        valueOrEmpty(rot.gamma),
+
+        lastOrientation.alpha,
+        lastOrientation.beta,
+        lastOrientation.gamma
+      ];
+
+      rows.push(row);
+
+      document.getElementById("count").textContent = rows.length - 1;
+
+      document.getElementById("output").textContent =
+`Čas: ${iso}
+
+Akcelerace bez gravitace:
+x: ${row[3]}
+y: ${row[4]}
+z: ${row[5]}
+
+Akcelerace včetně gravitace:
+x: ${row[6]}
+y: ${row[7]}
+z: ${row[8]}
+
+Gyroskop / rotationRate:
+alpha: ${row[9]}
+beta: ${row[10]}
+gamma: ${row[11]}
+
+Orientace:
+alpha: ${row[12]}
+beta: ${row[13]}
+gamma: ${row[14]}
+
+Interval události: ${row[2]} ms`;
+    }
+
+    function valueOrEmpty(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "number") return value.toFixed(6);
+      return value;
+    }
+
+    function downloadCSV() {
+      if (rows.length <= 1) {
+        alert("Nejsou dostupná žádná data k exportu.");
+        return;
+      }
+
+      const csv = rows.map(row =>
+        row.map(cell => {
+          const text = String(cell);
+          if (text.includes(",") || text.includes('"') || text.includes("\n")) {
+            return '"' + text.replace(/"/g, '""') + '"';
+          }
+          return text;
+        }).join(",")
+      ).join("\n");
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "ipad_sensor_data.csv";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(url);
+    }
+  </script>
+
+</body>
+</html>
